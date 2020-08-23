@@ -24,4 +24,4 @@ Good luck!
 
 ### Who do I talk to? ###
 
-For all problem and support contact "STO CAZZO"
+For all problem and support contact c1506t@gmail.com
