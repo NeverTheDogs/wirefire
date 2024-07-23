@@ -18,7 +18,7 @@ At the first start exec
 for resolve all dependencies.
 After u can run 
 
-./wirefire0.1.1
+./wirefire0.1.2
 
 Good luck!
 
