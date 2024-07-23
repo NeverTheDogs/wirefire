@@ -258,14 +258,14 @@ function checkdependences
 	fi
 	sleep 0.025
 
-	echo -ne "Bind............"
-	if ! hash bind9-config 2>/dev/null; then
-		echo -e "\e[1;31mNot installed"$transparent""
-		exit=1
-	else
-		echo -e "\e[1;32mOK!"$transparent""
-	fi
-	sleep 0.025
+	#echo -ne "Bind............"
+	#if ! hash bind9-config 2>/dev/null; then
+	#	echo -e "\e[1;31mNot installed"$transparent""
+	#	exit=1
+	#else
+	#	echo -e "\e[1;32mOK!"$transparent""
+	#fi
+	#sleep 0.025
 
 	echo -ne "Dhcpd..........."
 	if ! hash dhcpd 2>/dev/null; then
