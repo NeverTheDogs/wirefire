@@ -6,7 +6,7 @@ This README would normally document whatever steps are necessary to get your app
 
 This is a tool based on fluxion architecture at resouce "https://github.com/wi-fi-analyzer/fluxion" but implemented
 to use on raspberry pi with a kali-linux-arm architecture.
-Wirefire at version 0.1.1 is a tool for wifi phishing i hope that the people using only for a educational pourpouse.
+Wirefire at version 0.1.2 is a tool for wifi phishing i hope that the people using only for a educational pourpouse.
 Have funny!
 
 ### How do I get set up? ###
