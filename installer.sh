@@ -41,7 +41,7 @@ function top
 	echo -e "$white#########################################################"
 	echo -e "$white#                                                       #"
   	echo -e "$white#  $red      WIREFIRE ${yellow} $version   ${yellow}This is  the  installer      $white#"
-  	echo -e "$white#                  ${yellow}        for  a  this  tool        ${white}   #"
+  	echo -e "$white#                  ${yellow}        for     this  tool        ${white}   #"
 	echo -e "$white#                                                       #"
 	echo -e "$white#########################################################""$transparent"
 	echo
